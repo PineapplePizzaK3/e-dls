@@ -14,6 +14,7 @@ import { TriCurrencyDisplay } from '../components/TriCurrencyDisplay'
 import ImageLightbox from '../components/ImageLightbox'
 import { getProductConditionMeta } from '../lib/productCondition'
 import RichTextContent from '../components/RichTextContent'
+import ProductTechnicalSpecs from '../components/ProductTechnicalSpecs'
 import { richTextToPlainText } from '../lib/richText'
 
 function getProductImages(p) {
@@ -249,6 +250,11 @@ export default function LojaMirror() {
                   {detailProduct.description && (
                     <RichTextContent html={detailProduct.description} className="mt-2 text-earth-600" />
                   )}
+                  <ProductTechnicalSpecs
+                    template={detailProduct.spec_template}
+                    specs={detailProduct.technical_specs}
+                    className="mt-3"
+                  />
                   {(() => {
                     const p = detailProduct
                     const jpy = Number(p.price_jpy ?? p.price) || 0

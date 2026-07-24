@@ -15,6 +15,7 @@ import { showCartToast } from '../../lib/cartToast'
 import ImageLightbox from '../../components/ImageLightbox'
 import { getProductConditionMeta } from '../../lib/productCondition'
 import RichTextContent from '../../components/RichTextContent'
+import ProductTechnicalSpecs from '../../components/ProductTechnicalSpecs'
 import {
   ProductPriceBlock,
   getProductImages,
@@ -162,6 +163,22 @@ export default function StoreProductDetail({ publicMode = false }) {
     const productDescription = String(product?.description ?? '').trim()
     return productDescription
   }, [product?.description, selectedVariant])
+
+  const effectiveTechnicalSpecs = useMemo(() => {
+    const globalSpecs =
+      product?.technical_specs && typeof product.technical_specs === 'object' && !Array.isArray(product.technical_specs)
+        ? product.technical_specs
+        : {}
+    const variantAttrs =
+      selectedVariant?.attributes && typeof selectedVariant.attributes === 'object'
+        ? selectedVariant.attributes
+        : {}
+    const variantSpecs =
+      variantAttrs?.technical_specs && typeof variantAttrs.technical_specs === 'object' && !Array.isArray(variantAttrs.technical_specs)
+        ? variantAttrs.technical_specs
+        : {}
+    return { ...globalSpecs, ...variantSpecs }
+  }, [product?.technical_specs, selectedVariant])
 
   const images = useMemo(() => {
     const variantImages = selectedVariant
@@ -316,6 +333,11 @@ export default function StoreProductDetail({ publicMode = false }) {
                 {displayDescription && (
                   <RichTextContent html={displayDescription} className="mt-4 text-earth-600" />
                 )}
+                <ProductTechnicalSpecs
+                  template={product?.spec_template}
+                  specs={effectiveTechnicalSpecs}
+                  className="mt-5"
+                />
                 <div className="mt-6">
                   <ProductPriceBlock
                     product={

@@ -205,6 +205,95 @@ export default function Admin({ routeTabId = 'pedidos' }) {
     return { cover, urls }
   }
 
+  const normalizeTechnicalSpecs = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    const out = {}
+    for (const [key, raw] of Object.entries(value)) {
+      const safeKey = String(key || '').trim()
+      if (!safeKey) continue
+      out[safeKey] = raw
+    }
+    return out
+  }
+
+  const getTemplateFields = (template) => {
+    const list = Array.isArray(template?.fields) ? template.fields : []
+    const seen = new Set()
+    return list
+      .map((field) => {
+        const key = String(field?.key || '').trim()
+        if (!key || seen.has(key)) return null
+        seen.add(key)
+        const type = String(field?.type || 'text').trim()
+        return {
+          key,
+          label: String(field?.label || key).trim(),
+          required: Boolean(field?.required),
+          type: ['text', 'number', 'boolean', 'select'].includes(type) ? type : 'text',
+          options: Array.isArray(field?.options)
+            ? field.options.map((opt) => String(opt || '').trim()).filter(Boolean)
+            : [],
+        }
+      })
+      .filter(Boolean)
+  }
+
+  const sanitizeSpecsForTemplate = (value, template) => {
+    const specs = normalizeTechnicalSpecs(value)
+    const fields = getTemplateFields(template)
+    if (fields.length === 0) return { specs: {}, errors: [] }
+    const sanitized = {}
+    const errors = []
+    for (const field of fields) {
+      const raw = specs[field.key]
+      if (raw == null || raw === '') {
+        if (field.required) errors.push(`Campo técnico obrigatório: ${field.label}`)
+        continue
+      }
+      if (field.type === 'number') {
+        const num = Number(raw)
+        if (!Number.isFinite(num)) {
+          errors.push(`Campo técnico numérico inválido: ${field.label}`)
+          continue
+        }
+        sanitized[field.key] = num
+        continue
+      }
+      if (field.type === 'boolean') {
+        if (typeof raw === 'boolean') {
+          sanitized[field.key] = raw
+          continue
+        }
+        const txt = String(raw).trim().toLowerCase()
+        if (txt === 'true' || txt === 'sim' || txt === '1') {
+          sanitized[field.key] = true
+          continue
+        }
+        if (txt === 'false' || txt === 'nao' || txt === 'não' || txt === '0') {
+          sanitized[field.key] = false
+          continue
+        }
+        errors.push(`Campo técnico booleano inválido: ${field.label}`)
+        continue
+      }
+      if (field.type === 'select') {
+        const txt = String(raw).trim()
+        if (!txt) {
+          if (field.required) errors.push(`Campo técnico obrigatório: ${field.label}`)
+          continue
+        }
+        if (field.options.length > 0 && !field.options.includes(txt)) {
+          errors.push(`Opção inválida em ${field.label}`)
+          continue
+        }
+        sanitized[field.key] = txt
+        continue
+      }
+      sanitized[field.key] = String(raw).trim()
+    }
+    return { specs: sanitized, errors }
+  }
+
   const createDefaultVariantForm = (seed = {}) => ({
     title: seed.title ?? 'Padrão',
     version: seed.version ?? seed.title ?? 'Padrão',
@@ -221,6 +310,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
     item_condition: seed.item_condition ?? 'new',
     weight_kg: seed.weight_kg ?? '',
     weight_unit: seed.weight_unit ?? 'g',
+    technical_specs: normalizeTechnicalSpecs(seed.technical_specs),
   })
 
   const normalizeVariantForms = (variants, fallback = {}) => {
@@ -252,6 +342,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
           description: v?.description ?? attrs.description ?? '',
           weight_kg: v?.weight_kg ?? attrs.weight_kg ?? '',
           weight_unit: v?.weight_unit ?? attrs.weight_unit ?? 'g',
+          technical_specs: normalizeTechnicalSpecs(v?.technical_specs ?? attrs?.technical_specs),
           image_url: variantImageUrl,
           image_urls: variantImageUrls,
         }),
@@ -296,6 +387,9 @@ export default function Admin({ routeTabId = 'pedidos' }) {
     stock_quantity: '',
     item_condition: 'new',
     category: '',
+    spec_template_id: '',
+    spec_template: null,
+    technical_specs: {},
     admin_product_url: '',
     image_url: '',
     image_url_input: '',
@@ -1124,6 +1218,9 @@ export default function Admin({ routeTabId = 'pedidos' }) {
       stock_quantity: '',
       item_condition: 'new',
       category: '',
+      spec_template_id: '',
+      spec_template: null,
+      technical_specs: {},
       admin_product_url: '',
       image_url: '',
       image_url_input: '',
@@ -1949,6 +2046,9 @@ export default function Admin({ routeTabId = 'pedidos' }) {
       stock_quantity: p.stock_quantity != null ? String(p.stock_quantity) : '',
       item_condition: normalizeProductCondition(p.item_condition),
       category: p.category ?? '',
+      spec_template_id: p.spec_template_id ?? p.spec_template?.id ?? '',
+      spec_template: p.spec_template ?? null,
+      technical_specs: normalizeTechnicalSpecs(p.technical_specs),
       admin_product_url: p.admin_product_url ?? '',
       image_url: p.image_url ?? urls[0] ?? '',
       image_url_input: '',
@@ -2001,6 +2101,15 @@ export default function Admin({ routeTabId = 'pedidos' }) {
     const stockQty = form.stock_quantity === '' || form.stock_quantity == null
       ? null
       : Math.max(0, parseInt(form.stock_quantity, 10) || 0)
+    const activeSpecTemplate = form?.spec_template && form.spec_template?.id === form.spec_template_id
+      ? form.spec_template
+      : null
+    const globalSpecResult = sanitizeSpecsForTemplate(form.technical_specs, activeSpecTemplate)
+    if (globalSpecResult.errors.length > 0) {
+      setScopedMessage('catalogo', globalSpecResult.errors[0])
+      return
+    }
+    const variantSpecErrors = []
     const simpleModeVariant = {
       title: String(form.name || '').trim() || 'Padrão',
       attributes: {
@@ -2011,6 +2120,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
         description: String(form.description || '').trim() || null,
         weight_kg: weightKg,
         weight_unit: form.weight_unit || 'g',
+        technical_specs: {},
       },
       sku: null,
       image_url: imageUrls[0] || form.image_url || null,
@@ -2027,6 +2137,10 @@ export default function Admin({ routeTabId = 'pedidos' }) {
         .map((v, index) => ({
           ...(function () {
             const { cover, urls: vUrls } = resolveVariantImages(v)
+            const variantSpecResult = sanitizeSpecsForTemplate(v.technical_specs, activeSpecTemplate)
+            if (variantSpecResult.errors.length > 0) {
+              variantSpecErrors.push(variantSpecResult.errors[0])
+            }
             return {
               title: String(v.title || v.version || '').trim() || null,
               attributes: {
@@ -2041,6 +2155,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
                   return v.weight_unit === 'g' ? raw / 1000 : raw
                 })(),
                 weight_unit: v.weight_unit || 'g',
+                technical_specs: variantSpecResult.specs,
               },
               sku: String(v.sku || '').trim() || null,
               image_url: cover || null,
@@ -2053,6 +2168,11 @@ export default function Admin({ routeTabId = 'pedidos' }) {
           })(),
         }))
 
+    if (variantSpecErrors.length > 0) {
+      setScopedMessage('catalogo', variantSpecErrors[0])
+      return
+    }
+
     const payload = {
       name: form.name,
       description: form.description || null,
@@ -2062,6 +2182,11 @@ export default function Admin({ routeTabId = 'pedidos' }) {
       item_condition: normalizeProductCondition(form.item_condition),
       category:
         form.category != null && String(form.category).trim() !== '' ? String(form.category).trim() : null,
+      spec_template_id:
+        form.spec_template_id != null && String(form.spec_template_id).trim() !== ''
+          ? String(form.spec_template_id).trim()
+          : null,
+      technical_specs: globalSpecResult.specs,
       admin_product_url: form.admin_product_url != null && String(form.admin_product_url).trim() !== '' ? String(form.admin_product_url).trim() : null,
       image_url: imageUrls[0] || form.image_url || null,
       image_urls: imageUrls,
@@ -2154,6 +2279,8 @@ export default function Admin({ routeTabId = 'pedidos' }) {
       stock_quantity: p.stock_quantity ?? null,
       item_condition: normalizeProductCondition(p.item_condition),
       category: p.category != null && String(p.category).trim() !== '' ? String(p.category).trim() : null,
+      spec_template_id: p.spec_template_id ?? null,
+      technical_specs: normalizeTechnicalSpecs(p.technical_specs),
       admin_product_url: p.admin_product_url != null && String(p.admin_product_url).trim() !== '' ? String(p.admin_product_url).trim() : null,
       image_url: urls[0] || p.image_url || '',
       image_urls: urls,

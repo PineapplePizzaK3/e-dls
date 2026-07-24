@@ -39,6 +39,17 @@ function normalizeVariantImages(variant) {
   return { image_url, image_urls }
 }
 
+function normalizeTechnicalSpecs(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out = {}
+  for (const [key, raw] of Object.entries(value)) {
+    const safeKey = String(key || '').trim()
+    if (!safeKey) continue
+    out[safeKey] = raw
+  }
+  return out
+}
+
 export async function getProducts() {
   try {
     const { data, error } = await withDbTimeout(
@@ -187,6 +198,11 @@ export async function createProduct(product) {
         product.admin_product_url != null && String(product.admin_product_url).trim() !== ''
           ? String(product.admin_product_url).trim()
           : null,
+      spec_template_id:
+        product.spec_template_id != null && String(product.spec_template_id).trim() !== ''
+          ? String(product.spec_template_id).trim()
+          : null,
+      technical_specs: normalizeTechnicalSpecs(product.technical_specs),
       variants: variants.map((v, index) => {
         const { image_url, image_urls } = normalizeVariantImages(v)
         return {
@@ -234,6 +250,11 @@ export async function updateProduct(id, product) {
         product.admin_product_url != null && String(product.admin_product_url).trim() !== ''
           ? String(product.admin_product_url).trim()
           : null,
+      spec_template_id:
+        product.spec_template_id != null && String(product.spec_template_id).trim() !== ''
+          ? String(product.spec_template_id).trim()
+          : null,
+      technical_specs: normalizeTechnicalSpecs(product.technical_specs),
       variants: variants.map((v, index) => {
         const { image_url, image_urls } = normalizeVariantImages(v)
         return {

@@ -5,10 +5,80 @@ import { useSiteLocale } from '../../../../hooks/useSiteLocale'
 import { appStoreProductPath } from '../../../../lib/localeRoutes'
 import { useAdminContext } from '../AdminContext'
 import ProductCoreFields from './ProductCoreFields'
+import ProductTechnicalSpecsEditor from './ProductTechnicalSpecsEditor'
 import ProductScrapeBlock from './ProductScrapeBlock'
 import { scrapeProductUrl } from '../../../../services/wishlistLinkService'
+import {
+  createProductSpecTemplateAdmin,
+  deleteProductSpecTemplateAdmin,
+  listProductSpecTemplatesAdmin,
+  updateProductSpecTemplateAdmin,
+} from '../../../../services/productSpecTemplateService'
 import RichTextEditor from '../../../../components/RichTextEditor'
 import { richTextToPlainText } from '../../../../lib/richText'
+
+const SPEC_FIELD_TYPES = [
+  { value: 'text', label: 'Texto' },
+  { value: 'number', label: 'Numero' },
+  { value: 'boolean', label: 'Sim/nao' },
+  { value: 'select', label: 'Selecao' },
+]
+
+function createEmptyTemplateField(seed = {}) {
+  return {
+    key: String(seed.key || '').trim(),
+    label: String(seed.label || '').trim(),
+    type: ['text', 'number', 'boolean', 'select'].includes(seed.type) ? seed.type : 'text',
+    unit: String(seed.unit || '').trim(),
+    required: Boolean(seed.required),
+    optionsText: Array.isArray(seed.options) ? seed.options.join(', ') : String(seed.optionsText || ''),
+    order: Number(seed.order) || 0,
+  }
+}
+
+function normalizeTemplateFieldsForSave(fields) {
+  const list = Array.isArray(fields) ? fields : []
+  return list
+    .map((field, index) => {
+      const key = String(field?.key || '').trim()
+      if (!key) return null
+      const options = String(field?.optionsText || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+      return {
+        key,
+        label: String(field?.label || key).trim(),
+        type: ['text', 'number', 'boolean', 'select'].includes(field?.type) ? field.type : 'text',
+        unit: String(field?.unit || '').trim() || null,
+        required: Boolean(field?.required),
+        options,
+        order: Number(field?.order) || index,
+      }
+    })
+    .filter(Boolean)
+}
+
+function normalizeSpecMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value
+}
+
+function getTemplateKeys(template) {
+  const fields = Array.isArray(template?.fields) ? template.fields : []
+  return fields.map((field) => String(field?.key || '').trim()).filter(Boolean)
+}
+
+function pruneSpecsByTemplate(value, template) {
+  const map = normalizeSpecMap(value)
+  const keys = new Set(getTemplateKeys(template))
+  if (keys.size === 0) return {}
+  const next = {}
+  for (const [key, fieldVal] of Object.entries(map)) {
+    if (keys.has(key)) next[key] = fieldVal
+  }
+  return next
+}
 
 export default function CatalogoProdutosSection() {
   const locale = useSiteLocale()
@@ -64,6 +134,16 @@ export default function CatalogoProdutosSection() {
   } = useAdminContext()
 
   const catalogEditorRef = useRef(null)
+  const [specTemplates, setSpecTemplates] = useState([])
+  const [specTemplatesLoading, setSpecTemplatesLoading] = useState(false)
+  const [specTemplateSaving, setSpecTemplateSaving] = useState(false)
+  const [specTemplateMessage, setSpecTemplateMessage] = useState('')
+  const [editingSpecTemplateId, setEditingSpecTemplateId] = useState('')
+  const [specTemplateForm, setSpecTemplateForm] = useState({
+    name: '',
+    category: '',
+    fields: [createEmptyTemplateField({ order: 0 })],
+  })
 
   useEffect(() => {
     if (!catalogCreateOpen || !editingId) return
@@ -76,8 +156,33 @@ export default function CatalogoProdutosSection() {
     }
   }, [catalogCreateOpen, editingId])
 
+  useEffect(() => {
+    if (activeTab !== 'catalogo_produtos') return
+    let mounted = true
+    const run = async () => {
+      setSpecTemplatesLoading(true)
+      const { data, error } = await listProductSpecTemplatesAdmin(500, 0)
+      if (!mounted) return
+      if (error) {
+        setSpecTemplateMessage(error.message || 'Erro ao carregar templates de ficha técnica.')
+      } else {
+        setSpecTemplates(Array.isArray(data) ? data : [])
+      }
+      setSpecTemplatesLoading(false)
+    }
+    run()
+    return () => {
+      mounted = false
+    }
+  }, [activeTab])
+
   const localMessage = String(sectionMessages?.catalogo || '')
   const localMessageIsError = /erro|inválid|obrigat|falha|não foi possível|selecione|preencha/i.test(localMessage.toLowerCase())
+
+  const selectedSpecTemplate = useMemo(
+    () => specTemplates.find((tpl) => tpl?.id === form?.spec_template_id) || form?.spec_template || null,
+    [specTemplates, form?.spec_template_id, form?.spec_template]
+  )
 
   if (activeTab !== 'catalogo_produtos') return null
 
@@ -206,6 +311,7 @@ export default function CatalogoProdutosSection() {
     admin_product_url: variant?.admin_product_url ?? '',
     image_url: variant?.image_url ?? '',
     image_urls: getVariantImages(variant),
+    technical_specs: normalizeSpecMap(variant?.technical_specs),
   })
 
   const setVariantForm = (index, updater) => {
@@ -228,6 +334,7 @@ export default function CatalogoProdutosSection() {
         sku: next.sku ?? prev?.sku ?? '',
         weight_kg: next.weight_kg,
         weight_unit: next.weight_unit || 'g',
+        technical_specs: normalizeSpecMap(next.technical_specs),
         item_condition: next.item_condition ?? 'new',
         category: next.category ?? '',
         description: next.description ?? '',
@@ -250,6 +357,7 @@ export default function CatalogoProdutosSection() {
       sku: '',
       image_url: f?.image_url ?? '',
       image_urls: Array.isArray(f?.image_urls) ? f.image_urls.filter(Boolean) : (f?.image_url ? [f.image_url] : []),
+      technical_specs: {},
       is_active: true,
       is_default: true,
       item_condition: f?.item_condition ?? 'new',
@@ -356,6 +464,117 @@ export default function CatalogoProdutosSection() {
       minPrice,
       stockLabel,
     }
+  }
+
+  const resetSpecTemplateForm = () => {
+    setEditingSpecTemplateId('')
+    setSpecTemplateForm({
+      name: '',
+      category: '',
+      fields: [createEmptyTemplateField({ order: 0 })],
+    })
+  }
+
+  const refreshSpecTemplates = async () => {
+    setSpecTemplatesLoading(true)
+    const { data, error } = await listProductSpecTemplatesAdmin(500, 0)
+    if (error) {
+      setSpecTemplateMessage(error.message || 'Erro ao carregar templates de ficha técnica.')
+      setSpecTemplatesLoading(false)
+      return
+    }
+    const list = Array.isArray(data) ? data : []
+    setSpecTemplates(list)
+    setSpecTemplatesLoading(false)
+    if (form?.spec_template_id && !list.some((tpl) => tpl?.id === form.spec_template_id)) {
+      setForm((prev) => ({
+        ...prev,
+        spec_template_id: '',
+        technical_specs: {},
+        variants: (Array.isArray(prev.variants) ? prev.variants : []).map((variant) => ({
+          ...variant,
+          technical_specs: {},
+        })),
+      }))
+    }
+  }
+
+  const handleEditSpecTemplate = (template) => {
+    const fields = Array.isArray(template?.fields) ? template.fields : []
+    setEditingSpecTemplateId(template?.id || '')
+    setSpecTemplateForm({
+      name: String(template?.name || ''),
+      category: String(template?.category || ''),
+      fields: fields.length > 0
+        ? fields.map((field, index) => createEmptyTemplateField({
+          ...field,
+          order: Number(field?.order) || index,
+        }))
+        : [createEmptyTemplateField({ order: 0 })],
+    })
+  }
+
+  const handleSaveSpecTemplate = async (e) => {
+    e.preventDefault()
+    setSpecTemplateMessage('')
+    const payload = {
+      name: String(specTemplateForm.name || '').trim(),
+      category: String(specTemplateForm.category || '').trim() || null,
+      fields: normalizeTemplateFieldsForSave(specTemplateForm.fields),
+    }
+    if (!payload.name) {
+      setSpecTemplateMessage('Nome do template é obrigatório.')
+      return
+    }
+    if (payload.fields.length === 0) {
+      setSpecTemplateMessage('Adicione pelo menos um campo na ficha técnica.')
+      return
+    }
+
+    setSpecTemplateSaving(true)
+    const op = editingSpecTemplateId
+      ? updateProductSpecTemplateAdmin(editingSpecTemplateId, payload)
+      : createProductSpecTemplateAdmin(payload)
+    const { error } = await op
+    setSpecTemplateSaving(false)
+    if (error) {
+      setSpecTemplateMessage(error.message || 'Erro ao salvar template.')
+      return
+    }
+    setSpecTemplateMessage(editingSpecTemplateId ? 'Template atualizado.' : 'Template criado.')
+    resetSpecTemplateForm()
+    await refreshSpecTemplates()
+  }
+
+  const handleDeleteSpecTemplate = async (templateId) => {
+    if (!templateId) return
+    if (!confirm('Excluir este template de ficha técnica?')) return
+    setSpecTemplateSaving(true)
+    const { error } = await deleteProductSpecTemplateAdmin(templateId)
+    setSpecTemplateSaving(false)
+    if (error) {
+      setSpecTemplateMessage(error.message || 'Erro ao excluir template.')
+      return
+    }
+    setSpecTemplateMessage('Template removido.')
+    if (editingSpecTemplateId === templateId) {
+      resetSpecTemplateForm()
+    }
+    await refreshSpecTemplates()
+  }
+
+  const applySpecTemplateToForm = (templateId) => {
+    const template = specTemplates.find((tpl) => tpl?.id === templateId) || null
+    setForm((prev) => ({
+      ...prev,
+      spec_template_id: templateId,
+      spec_template: template,
+      technical_specs: pruneSpecsByTemplate(prev.technical_specs, template),
+      variants: (Array.isArray(prev.variants) ? prev.variants : []).map((variant) => ({
+        ...variant,
+        technical_specs: pruneSpecsByTemplate(variant?.technical_specs, template),
+      })),
+    }))
   }
 
   useEffect(() => {
@@ -497,6 +716,227 @@ export default function CatalogoProdutosSection() {
         </p>
       )}
 
+      <div className="mt-4 rounded-lg border border-earth-200 bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-earth-900">Templates de ficha técnica</h3>
+            <p className="text-xs text-earth-600">
+              Estruture campos reutilizáveis para preencher especificações dos produtos.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={refreshSpecTemplates}
+            className="rounded border border-earth-300 px-2 py-1 text-xs font-medium text-earth-700 hover:bg-earth-50"
+          >
+            Atualizar templates
+          </button>
+        </div>
+
+        {specTemplateMessage && (
+          <p className="mt-2 rounded bg-earth-100 px-2 py-1 text-xs text-earth-700">{specTemplateMessage}</p>
+        )}
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <form onSubmit={handleSaveSpecTemplate} className="space-y-2 rounded-lg border border-earth-200 bg-earth-50 p-3">
+            <p className="text-xs font-semibold text-earth-800">
+              {editingSpecTemplateId ? 'Editar template' : 'Novo template'}
+            </p>
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+              <label className="text-xs text-earth-700">
+                Nome
+                <input
+                  type="text"
+                  value={specTemplateForm.name}
+                  onChange={(e) => setSpecTemplateForm((prev) => ({ ...prev, name: e.target.value }))}
+                  className="mt-1 block w-full rounded border border-earth-300 px-2 py-1 text-sm text-earth-900"
+                  required
+                />
+              </label>
+              <label className="text-xs text-earth-700">
+                Categoria (opcional)
+                <input
+                  type="text"
+                  value={specTemplateForm.category}
+                  onChange={(e) => setSpecTemplateForm((prev) => ({ ...prev, category: e.target.value }))}
+                  className="mt-1 block w-full rounded border border-earth-300 px-2 py-1 text-sm text-earth-900"
+                />
+              </label>
+            </div>
+
+            <div className="space-y-2">
+              {(Array.isArray(specTemplateForm.fields) ? specTemplateForm.fields : []).map((field, index) => (
+                <div key={`${field.key}-${index}`} className="rounded border border-earth-200 bg-white p-2">
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
+                    <input
+                      type="text"
+                      value={field.key}
+                      onChange={(e) => setSpecTemplateForm((prev) => {
+                        const next = Array.isArray(prev.fields) ? [...prev.fields] : []
+                        next[index] = { ...next[index], key: e.target.value }
+                        return { ...prev, fields: next }
+                      })}
+                      placeholder="chave_ex: bateria_mah"
+                      className="rounded border border-earth-300 px-2 py-1 text-xs text-earth-900 md:col-span-2"
+                    />
+                    <input
+                      type="text"
+                      value={field.label}
+                      onChange={(e) => setSpecTemplateForm((prev) => {
+                        const next = Array.isArray(prev.fields) ? [...prev.fields] : []
+                        next[index] = { ...next[index], label: e.target.value }
+                        return { ...prev, fields: next }
+                      })}
+                      placeholder="Rótulo"
+                      className="rounded border border-earth-300 px-2 py-1 text-xs text-earth-900 md:col-span-2"
+                    />
+                    <select
+                      value={field.type}
+                      onChange={(e) => setSpecTemplateForm((prev) => {
+                        const next = Array.isArray(prev.fields) ? [...prev.fields] : []
+                        next[index] = { ...next[index], type: e.target.value }
+                        return { ...prev, fields: next }
+                      })}
+                      className="rounded border border-earth-300 px-2 py-1 text-xs text-earth-900"
+                    >
+                      {SPEC_FIELD_TYPES.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      value={field.order}
+                      onChange={(e) => setSpecTemplateForm((prev) => {
+                        const next = Array.isArray(prev.fields) ? [...prev.fields] : []
+                        next[index] = { ...next[index], order: Number(e.target.value) || 0 }
+                        return { ...prev, fields: next }
+                      })}
+                      className="rounded border border-earth-300 px-2 py-1 text-xs text-earth-900"
+                      placeholder="Ordem"
+                    />
+                  </div>
+                  <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                    <input
+                      type="text"
+                      value={field.unit}
+                      onChange={(e) => setSpecTemplateForm((prev) => {
+                        const next = Array.isArray(prev.fields) ? [...prev.fields] : []
+                        next[index] = { ...next[index], unit: e.target.value }
+                        return { ...prev, fields: next }
+                      })}
+                      placeholder="Unidade (ex.: mm, mAh)"
+                      className="rounded border border-earth-300 px-2 py-1 text-xs text-earth-900"
+                    />
+                    <input
+                      type="text"
+                      value={field.optionsText}
+                      onChange={(e) => setSpecTemplateForm((prev) => {
+                        const next = Array.isArray(prev.fields) ? [...prev.fields] : []
+                        next[index] = { ...next[index], optionsText: e.target.value }
+                        return { ...prev, fields: next }
+                      })}
+                      placeholder="Opções (separadas por vírgula)"
+                      className="rounded border border-earth-300 px-2 py-1 text-xs text-earth-900 md:col-span-2"
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center justify-between">
+                    <label className="inline-flex items-center gap-1 text-xs text-earth-700">
+                      <input
+                        type="checkbox"
+                        checked={field.required}
+                        onChange={(e) => setSpecTemplateForm((prev) => {
+                          const next = Array.isArray(prev.fields) ? [...prev.fields] : []
+                          next[index] = { ...next[index], required: e.target.checked }
+                          return { ...prev, fields: next }
+                        })}
+                      />
+                      Obrigatório
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setSpecTemplateForm((prev) => {
+                        const next = (Array.isArray(prev.fields) ? prev.fields : []).filter((_, i) => i !== index)
+                        return {
+                          ...prev,
+                          fields: next.length > 0 ? next : [createEmptyTemplateField({ order: 0 })],
+                        }
+                      })}
+                      className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                    >
+                      Remover campo
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSpecTemplateForm((prev) => ({
+                  ...prev,
+                  fields: [...(Array.isArray(prev.fields) ? prev.fields : []), createEmptyTemplateField({ order: (prev.fields?.length || 0) + 1 })],
+                }))}
+                className="rounded border border-earth-300 px-2 py-1 text-xs font-medium text-earth-700 hover:bg-earth-100"
+              >
+                Adicionar campo
+              </button>
+              <button
+                type="submit"
+                disabled={specTemplateSaving}
+                className="rounded bg-earth-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-earth-800 disabled:opacity-60"
+              >
+                {specTemplateSaving ? 'Salvando...' : (editingSpecTemplateId ? 'Salvar template' : 'Criar template')}
+              </button>
+              {editingSpecTemplateId && (
+                <button
+                  type="button"
+                  onClick={resetSpecTemplateForm}
+                  className="rounded border border-earth-300 px-2 py-1 text-xs text-earth-700 hover:bg-earth-100"
+                >
+                  Cancelar edição
+                </button>
+              )}
+            </div>
+          </form>
+
+          <div className="rounded-lg border border-earth-200 bg-earth-50 p-3">
+            <p className="text-xs font-semibold text-earth-800">Templates cadastrados</p>
+            {specTemplatesLoading && <p className="mt-2 text-xs text-earth-600">Carregando templates...</p>}
+            {!specTemplatesLoading && specTemplates.length === 0 && (
+              <p className="mt-2 text-xs text-earth-600">Nenhum template cadastrado.</p>
+            )}
+            <div className="mt-2 space-y-2">
+              {specTemplates.map((template) => (
+                <div key={template.id} className="rounded border border-earth-200 bg-white p-2">
+                  <p className="text-sm font-medium text-earth-900">{template.name}</p>
+                  <p className="text-xs text-earth-600">
+                    {(Array.isArray(template.fields) ? template.fields.length : 0)} campos
+                    {template.category ? ` • ${template.category}` : ''}
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleEditSpecTemplate(template)}
+                      className="rounded border border-earth-300 px-2 py-1 text-xs text-earth-700 hover:bg-earth-50"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSpecTemplate(template.id)}
+                      className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {catalogCreateOpen && (
         <form
           ref={catalogEditorRef}
@@ -615,6 +1055,29 @@ export default function CatalogoProdutosSection() {
                   className="mt-1 block w-full rounded border border-earth-300 px-2 py-1 text-sm text-earth-900"
                 />
               </label>
+              <label className="text-xs text-earth-700 md:col-span-2">
+                Template de ficha técnica
+                <select
+                  value={form.spec_template_id ?? ''}
+                  onChange={(e) => applySpecTemplateToForm(e.target.value)}
+                  className="mt-1 block w-full rounded border border-earth-300 bg-white px-2 py-1 text-sm text-earth-900"
+                >
+                  <option value="">Sem ficha técnica estruturada</option>
+                  {specTemplates.map((tpl) => (
+                    <option key={tpl.id} value={tpl.id}>
+                      {tpl.name}{tpl.category ? ` (${tpl.category})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-3">
+              <ProductTechnicalSpecsEditor
+                template={selectedSpecTemplate}
+                value={form.technical_specs}
+                onChange={(next) => setForm((prev) => ({ ...prev, technical_specs: next }))}
+                title="Ficha técnica global do produto"
+              />
             </div>
             <div className="mt-2 block text-xs text-earth-700">
               <span className="block font-medium text-earth-700">Descrição global</span>
@@ -636,7 +1099,7 @@ export default function CatalogoProdutosSection() {
                 type="button"
                 onClick={() => setForm((f) => ({
                   ...f,
-                  variants: [...(Array.isArray(f.variants) ? f.variants : []), { title: '', version: '', price_jpy: f.price || '0', stock_quantity: '', sku: '', image_url: '', image_urls: [], is_active: true, is_default: false }],
+                  variants: [...(Array.isArray(f.variants) ? f.variants : []), { title: '', version: '', price_jpy: f.price || '0', stock_quantity: '', sku: '', image_url: '', image_urls: [], technical_specs: {}, is_active: true, is_default: false }],
                 }))}
                 className="rounded border border-earth-300 px-2 py-1 text-xs font-medium text-earth-700 hover:bg-earth-50"
               >
@@ -768,6 +1231,16 @@ export default function CatalogoProdutosSection() {
                       />
                     </label>
                   </div>
+
+                  <div className="mt-3">
+                    <ProductTechnicalSpecsEditor
+                      template={selectedSpecTemplate}
+                      value={variant?.technical_specs}
+                      onChange={(next) => updateVariantAt(index, { technical_specs: next })}
+                      title="Sobrescritas técnicas da versão"
+                      emptyMessage="Selecione um template no bloco global para habilitar sobrescritas por versão."
+                    />
+                  </div>
                 </div>
               ))}
             </div>
@@ -776,6 +1249,21 @@ export default function CatalogoProdutosSection() {
           ) : (
             <div className="rounded-lg border border-earth-200 bg-earth-50 p-3">
               <p className="mb-2 text-sm font-medium text-earth-800">Produto simples</p>
+              <label className="mb-3 block text-xs text-earth-700">
+                Template de ficha técnica
+                <select
+                  value={form.spec_template_id ?? ''}
+                  onChange={(e) => applySpecTemplateToForm(e.target.value)}
+                  className="mt-1 block w-full rounded border border-earth-300 bg-white px-2 py-1 text-sm text-earth-900"
+                >
+                  <option value="">Sem ficha técnica estruturada</option>
+                  {specTemplates.map((tpl) => (
+                    <option key={tpl.id} value={tpl.id}>
+                      {tpl.name}{tpl.category ? ` (${tpl.category})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <ProductCoreFields
                 form={form}
                 setForm={setForm}
@@ -794,6 +1282,14 @@ export default function CatalogoProdutosSection() {
                 showCondition
                 conditionOptions={PRODUCT_CONDITION_OPTIONS}
               />
+              <div className="mt-3">
+                <ProductTechnicalSpecsEditor
+                  template={selectedSpecTemplate}
+                  value={form.technical_specs}
+                  onChange={(next) => setForm((prev) => ({ ...prev, technical_specs: next }))}
+                  title="Ficha técnica do produto"
+                />
+              </div>
             </div>
           )}
 
