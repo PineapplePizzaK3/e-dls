@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { uploadProductImage } from '../../../../services/productService'
 import RichTextEditor from '../../../../components/RichTextEditor'
+import { computeFinalPriceJpy, normalizeMarginMultiplier } from '../../../../lib/productMargin'
 
 function parseAdminProductUrls(value) {
   return String(value || '')
@@ -26,6 +27,9 @@ export default function ProductCoreFields({
   removeImageAt = () => {},
   showCondition = false,
   conditionOptions = [],
+  showMargin = false,
+  /** Quando true (ex.: versões), o campo de preço é valor base sem UI de margem. */
+  priceAsBase = false,
 }) {
   const [newAdminUrl, setNewAdminUrl] = useState('')
   const adminUrls = useMemo(() => parseAdminProductUrls(form.admin_product_url), [form.admin_product_url])
@@ -49,6 +53,11 @@ export default function ProductCoreFields({
     return categoryOptions.find((option) => option.toLowerCase() === lower) || ''
   }, [categoryOptions, form?.category])
 
+  const finalPricePreview = useMemo(() => {
+    if (!showMargin) return null
+    return computeFinalPriceJpy(form.price, form.margin_multiplier)
+  }, [showMargin, form.price, form.margin_multiplier])
+
   const persistAdminUrls = (nextUrls) => {
     const clean = nextUrls
       .map((item) => String(item || '').trim())
@@ -68,7 +77,9 @@ export default function ProductCoreFields({
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           className="min-w-[140px] flex-1 rounded-lg border border-earth-300 px-3 py-2 text-sm text-earth-900"
         />
-        <span className="text-sm font-medium text-earth-700">Preço (¥):</span>
+        <span className="text-sm font-medium text-earth-700">
+          {showMargin || priceAsBase ? 'Valor base (¥):' : 'Preço (¥):'}
+        </span>
         <input
           required
           type="number"
@@ -79,6 +90,30 @@ export default function ProductCoreFields({
           onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
           className="w-24 rounded-lg border border-earth-300 px-3 py-2 text-sm text-earth-900"
         />
+        {showMargin && (
+          <>
+            <span className="text-sm font-medium text-earth-700">Margem (×):</span>
+            <input
+              required
+              type="number"
+              step="0.01"
+              min="0.01"
+              placeholder="1"
+              value={form.margin_multiplier ?? '1'}
+              onChange={(e) => setForm((f) => ({ ...f, margin_multiplier: e.target.value }))}
+              className="w-24 rounded-lg border border-earth-300 px-3 py-2 text-sm text-earth-900"
+            />
+            <span className="rounded-lg border border-earth-200 bg-earth-50 px-2.5 py-2 text-sm text-earth-800">
+              Final:{' '}
+              <strong>
+                ¥{Number(finalPricePreview || 0).toLocaleString('pt-BR')}
+              </strong>
+              <span className="ml-1 text-xs text-earth-500">
+                ({normalizeMarginMultiplier(form.margin_multiplier, 1)}×)
+              </span>
+            </span>
+          </>
+        )}
         <span className="text-sm font-medium text-earth-700">Peso (opcional):</span>
         <input
           type="number"
@@ -108,6 +143,11 @@ export default function ProductCoreFields({
           className="w-28 rounded-lg border border-earth-300 px-3 py-2 text-sm text-earth-900"
         />
       </div>
+      {showMargin && (
+        <p className="text-xs text-earth-500">
+          O valor final exibido na loja é <strong>valor base × margem</strong>. O scrape preenche o valor base.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         {showCondition && (

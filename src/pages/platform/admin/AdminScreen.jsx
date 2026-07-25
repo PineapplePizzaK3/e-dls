@@ -78,6 +78,12 @@ import { createCheckoutCouponAdmin, listCheckoutCouponsAdmin } from '../../../se
 import { sendAdminManualEmail } from '../../../services/adminEmailService'
 import { getPaymentsApiBase } from '../../../services/paymentService'
 import { PRODUCT_CONDITION_OPTIONS, getProductConditionMeta, normalizeProductCondition } from '../../../lib/productCondition'
+import {
+  computeFinalPriceJpy,
+  normalizeMarginMultiplier,
+  resolveProductBasePriceJpy,
+  resolveProductMarginMultiplier,
+} from '../../../lib/productMargin'
 import AdminTabsNav from './AdminTabsNav'
 import { ADMIN_TABS, adminGroupedTabPathFromId, getAdminCategoryByTabId, normalizeAdminTabId } from './adminTabs'
 import { AdminContextProvider } from './AdminContext'
@@ -130,6 +136,10 @@ function formatOrderModuleLabel(order) {
 function getProductBasePriceJpy(product) {
   const jpy = Number(product?.price_jpy ?? product?.price)
   return Number.isFinite(jpy) && jpy > 0 ? jpy : 0
+}
+
+function getProductFormBasePriceJpy(product) {
+  return resolveProductBasePriceJpy(product)
 }
 
 function PaginationControls({ page, hasMore, loading, onPrev, onNext }) {
@@ -382,6 +392,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
     name: '',
     description: '',
     price: '',
+    margin_multiplier: '1',
     weight_kg: '',
     weight_unit: 'g',
     stock_quantity: '',
@@ -1213,6 +1224,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
       name: '',
       description: '',
       price: '',
+      margin_multiplier: '1',
       weight_kg: '',
       weight_unit: 'g',
       stock_quantity: '',
@@ -2036,11 +2048,14 @@ export default function Admin({ routeTabId = 'pedidos' }) {
     const urls = getProductImageUrls(p)
     const kg = Number(p.weight_kg ?? 0)
     const useG = kg > 0 && kg < 1
+    const basePrice = getProductFormBasePriceJpy(p)
+    const margin = resolveProductMarginMultiplier(p)
     setForm({
       form_mode: (Array.isArray(p?.variants) ? p.variants.filter((v) => v?.is_active !== false).length : 0) > 1 ? 'variants' : 'simple',
       name: p.name,
       description: p.description ?? '',
-      price: String(Math.round(getProductBasePriceJpy(p))),
+      price: String(Math.round(basePrice)),
+      margin_multiplier: String(margin),
       weight_kg: kg > 0 ? (useG ? String(Math.round(kg * 1000)) : String(kg)) : '',
       weight_unit: useG ? 'g' : 'kg',
       stock_quantity: p.stock_quantity != null ? String(p.stock_quantity) : '',
@@ -2055,7 +2070,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
       image_urls: urls,
       variants: normalizeVariantForms(p.variants, {
         name: p.name,
-        price: String(Math.round(getProductBasePriceJpy(p))),
+        price: String(Math.round(basePrice)),
         stock_quantity: p.stock_quantity != null ? String(p.stock_quantity) : '',
         image_url: p.image_url ?? '',
         image_urls: Array.isArray(p.image_urls) ? p.image_urls.filter(Boolean) : (p.image_url ? [p.image_url] : []),
@@ -2065,6 +2080,12 @@ export default function Admin({ routeTabId = 'pedidos' }) {
         admin_product_url: p.admin_product_url ?? '',
         weight_kg: kg > 0 ? (useG ? String(Math.round(kg * 1000)) : String(kg)) : '',
         weight_unit: useG ? 'g' : 'kg',
+      }).map((v) => {
+        const variantFinal = Number(v.price_jpy)
+        const variantBase = Number.isFinite(variantFinal) && margin > 0
+          ? Math.round(variantFinal / margin)
+          : Math.round(basePrice)
+        return { ...v, price_jpy: String(Math.max(0, variantBase)) }
       }),
       is_active: p.is_active ?? true,
     })
@@ -2077,9 +2098,25 @@ export default function Admin({ routeTabId = 'pedidos' }) {
   const handleSave = async (e) => {
     e.preventDefault()
     setScopedMessage('catalogo', '')
-    const priceJpy = parseFloat(form.price)
-    if (isNaN(priceJpy) || priceJpy < 0) {
-      setScopedMessage('catalogo', 'Preço inválido')
+    const marginMultiplier = normalizeMarginMultiplier(form.margin_multiplier, 1)
+    if (!(marginMultiplier > 0)) {
+      setScopedMessage('catalogo', 'Margem inválida (use um número maior que zero)')
+      return
+    }
+    const firstVariantPriceRaw = form.form_mode === 'variants'
+      ? (Array.isArray(form.variants) ? form.variants : []).find(
+        (v) => String(v?.version || v?.title || '').trim() !== ''
+      )?.price_jpy
+      : null
+    const firstVariantBase =
+      firstVariantPriceRaw != null && String(firstVariantPriceRaw).trim() !== ''
+        ? Number(firstVariantPriceRaw)
+        : NaN
+    const basePriceJpy = Number.isFinite(firstVariantBase) && firstVariantBase >= 0
+      ? firstVariantBase
+      : parseFloat(form.price)
+    if (isNaN(basePriceJpy) || basePriceJpy < 0) {
+      setScopedMessage('catalogo', 'Valor base inválido')
       return
     }
     const weightRaw = form.weight_kg
@@ -2093,8 +2130,8 @@ export default function Admin({ routeTabId = 'pedidos' }) {
       weightVal = parsed
     }
     const weightKg = form.weight_unit === 'g' ? weightVal / 1000 : weightVal
-    // Persistimos preço base em JPY no catálogo.
-    const price = priceJpy
+    // Preço final exibido = base × margem.
+    const price = computeFinalPriceJpy(basePriceJpy, marginMultiplier)
     const imageUrls = Array.isArray(form.image_urls) && form.image_urls.length > 0
       ? form.image_urls.filter(Boolean)
       : (form.image_url ? [form.image_url] : [])
@@ -2125,7 +2162,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
       sku: null,
       image_url: imageUrls[0] || form.image_url || null,
       image_urls: imageUrls,
-      price_jpy: Math.max(0, Number(price) || 0),
+      price_jpy: price,
       stock_quantity: stockQty,
       is_active: true,
       is_default: true,
@@ -2141,6 +2178,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
             if (variantSpecResult.errors.length > 0) {
               variantSpecErrors.push(variantSpecResult.errors[0])
             }
+            const variantBase = Math.max(0, Number(v.price_jpy || basePriceJpy) || 0)
             return {
               title: String(v.title || v.version || '').trim() || null,
               attributes: {
@@ -2160,7 +2198,7 @@ export default function Admin({ routeTabId = 'pedidos' }) {
               sku: String(v.sku || '').trim() || null,
               image_url: cover || null,
               image_urls: vUrls,
-              price_jpy: Math.max(0, Number(v.price_jpy || price) || 0),
+              price_jpy: computeFinalPriceJpy(variantBase, marginMultiplier),
               stock_quantity: v.stock_quantity === '' || v.stock_quantity == null ? null : Math.max(0, Number(v.stock_quantity) || 0),
               is_active: v.is_active ?? true,
               is_default: v.is_default ?? index === 0,
@@ -2176,7 +2214,9 @@ export default function Admin({ routeTabId = 'pedidos' }) {
     const payload = {
       name: form.name,
       description: form.description || null,
-      price,
+      price: basePriceJpy,
+      base_price_jpy: basePriceJpy,
+      margin_multiplier: marginMultiplier,
       weight_kg: weightKg,
       stock_quantity: stockQty,
       item_condition: normalizeProductCondition(form.item_condition),
@@ -2274,7 +2314,9 @@ export default function Admin({ routeTabId = 'pedidos' }) {
     const payload = {
       name: `${(p.name || '').trim()} (cópia)`,
       description: p.description ?? '',
-      price: p.price,
+      price: resolveProductBasePriceJpy(p),
+      base_price_jpy: resolveProductBasePriceJpy(p),
+      margin_multiplier: resolveProductMarginMultiplier(p),
       weight_kg: p.weight_kg ?? 0,
       stock_quantity: p.stock_quantity ?? null,
       item_condition: normalizeProductCondition(p.item_condition),

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { PRODUCT_CONDITION_OPTIONS } from '../../../../lib/productCondition'
+import {
+  computeFinalPriceJpy,
+  resolveProductBasePriceJpy,
+} from '../../../../lib/productMargin'
 import { useSiteLocale } from '../../../../hooks/useSiteLocale'
 import { appStoreProductPath } from '../../../../lib/localeRoutes'
 import { useAdminContext } from '../AdminContext'
@@ -302,6 +306,7 @@ export default function CatalogoProdutosSection() {
   const getVariantForm = (variant) => ({
     name: variant?.version ?? variant?.title ?? '',
     price: variant?.price_jpy ?? '',
+    margin_multiplier: form?.margin_multiplier ?? '1',
     weight_kg: variant?.weight_kg ?? '',
     weight_unit: variant?.weight_unit ?? 'g',
     stock_quantity: variant?.stock_quantity ?? '',
@@ -424,7 +429,7 @@ export default function CatalogoProdutosSection() {
     setVariantForm(index, (prev) => ({
       ...prev,
       name: refProduct.name ?? prev.name,
-      price: String(Math.round(Number(refProduct.price_jpy ?? refProduct.price ?? prev.price ?? 0) || 0)),
+      price: String(Math.round(resolveProductBasePriceJpy(refProduct) || Number(prev.price) || 0)),
       category: refProduct.category ?? prev.category,
       description: refProduct.description ?? prev.description,
       admin_product_url: refProduct.admin_product_url ?? prev.admin_product_url,
@@ -1087,8 +1092,24 @@ export default function CatalogoProdutosSection() {
                 placeholder="Detalhes visíveis ao cliente; valem para todas as versões (opcional)"
               />
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-earth-700">Margem (×):</span>
+              <input
+                required
+                type="number"
+                step="0.01"
+                min="0.01"
+                placeholder="1"
+                value={form.margin_multiplier ?? '1'}
+                onChange={(e) => setForm((f) => ({ ...f, margin_multiplier: e.target.value }))}
+                className="w-24 rounded-lg border border-earth-300 px-3 py-2 text-sm text-earth-900"
+              />
+              <span className="text-xs text-earth-500">
+                Aplicada a todas as versões: preço final = valor base da versão × margem.
+              </span>
+            </div>
             <p className="mt-2 text-xs text-earth-600">
-              Preço, estoque e imagens são definidos por versão abaixo.
+              Valor base, estoque e imagens são definidos por versão abaixo. O preço final na loja usa a margem acima.
             </p>
           </div>
 
@@ -1217,7 +1238,17 @@ export default function CatalogoProdutosSection() {
                     removeImageAt={(imgIndex) => removeVariantImageAt(index, imgIndex)}
                     showCondition
                     conditionOptions={PRODUCT_CONDITION_OPTIONS}
+                    showMargin={false}
+                    priceAsBase
                   />
+                  {Number(form.margin_multiplier) > 0 && Number(variant.price_jpy) > 0 && (
+                    <p className="mt-1 text-xs text-earth-600">
+                      Final desta versão:{' '}
+                      <strong>
+                        ¥{computeFinalPriceJpy(variant.price_jpy, form.margin_multiplier).toLocaleString('pt-BR')}
+                      </strong>
+                    </p>
+                  )}
 
                   <div className="mt-2">
                     <label className="text-xs text-earth-700">
@@ -1281,6 +1312,7 @@ export default function CatalogoProdutosSection() {
                 removeImageAt={removeProductImageAt}
                 showCondition
                 conditionOptions={PRODUCT_CONDITION_OPTIONS}
+                showMargin
               />
               <div className="mt-3">
                 <ProductTechnicalSpecsEditor
