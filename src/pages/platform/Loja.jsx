@@ -1,5 +1,5 @@
 /**
- * Loja (Vitrine): grupos de compra (todas as origens) + aba Em estoque (catálogo com pronta entrega).
+ * Loja: aba Em estoque (catálogo com pronta entrega) + aba Vitrine (grupos de compra).
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
@@ -309,12 +309,14 @@ export default function Loja({ publicMode = false }) {
   const { t } = useTranslation()
   const { pathname } = useLocation()
   const [searchParams] = useSearchParams()
-  const tab = searchParams.get('tab') === 'estoque' ? 'estoque' : 'grupos'
+  // Default: Em Estoque. Vitrine only when explicitly requested.
+  const tabParam = String(searchParams.get('tab') || '').toLowerCase()
+  const tab = tabParam === 'vitrine' || tabParam === 'grupos' ? 'grupos' : 'estoque'
 
   const tabLinks = useMemo(
     () => ({
-      grupos: pathname,
-      estoque: `${pathname}?tab=estoque`,
+      estoque: pathname,
+      grupos: `${pathname}?tab=vitrine`,
     }),
     [pathname]
   )
@@ -334,14 +336,6 @@ export default function Loja({ publicMode = false }) {
 
           <div className="mt-5 flex flex-wrap gap-2 rounded-xl border border-earth-200 bg-earth-50 p-2">
             <Link
-              to={tabLinks.grupos}
-              className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
-                tab === 'grupos' ? 'bg-earth-900 text-earth-50' : 'bg-white text-earth-700 hover:bg-earth-100'
-              }`}
-            >
-              {t('platform.storeHub.tabShowcase')}
-            </Link>
-            <Link
               to={tabLinks.estoque}
               className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
                 tab === 'estoque' ? 'bg-earth-900 text-earth-50' : 'bg-white text-earth-700 hover:bg-earth-100'
@@ -349,13 +343,21 @@ export default function Loja({ publicMode = false }) {
             >
               {t('platform.storeHub.tabStock')}
             </Link>
+            <Link
+              to={tabLinks.grupos}
+              className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
+                tab === 'grupos' ? 'bg-earth-900 text-earth-50' : 'bg-white text-earth-700 hover:bg-earth-100'
+              }`}
+            >
+              {t('platform.storeHub.tabShowcase')}
+            </Link>
           </div>
 
           <div className="mt-6">
-            {tab === 'grupos' ? (
-              <GrupoDeCompras embedded hideHeader destination="all" publicMode={publicMode} />
-            ) : (
+            {tab === 'estoque' ? (
               <LojaEstoqueCatalog publicMode={publicMode} />
+            ) : (
+              <GrupoDeCompras embedded hideHeader destination="all" publicMode={publicMode} />
             )}
           </div>
         </div>
